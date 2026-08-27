@@ -1,0 +1,260 @@
+import java.util.*;
+
+/**
+ * SafeRouteDemo
+ * -------------
+ * A simplified, runnable console simulation of the "SafeRoute" idea:
+ *   1. Community hazard reports are stored on a map.
+ *   2. Two or more candidate routes (each a list of waypoints) are scored
+ *      by a simple AI-style risk engine based on proximity to hazards.
+ *   3. The lowest-risk route is chosen automatically (SafeRoute AI logic).
+ *   4. "Companion Mode" simulates a live trip, sending check-in updates
+ *      to trusted contacts at each waypoint.
+ *   5. If a new hazard is detected mid-trip (simulated), an SOS is
+ *      triggered and dispatched to trusted contacts, campus security,
+ *      and the nearest ride partner.
+ *
+ * This is a teaching/demo model, not a production system — the real
+ * app would replace RiskEngine's scoring with a trained model, and the
+ * "send" methods with real push/SMS/API calls.
+ */
+public class SafeRouteDemo {
+
+    public static void main(String[] args) {
+        System.out.println("========================================");
+        System.out.println(" SafeRoute — Console Simulation");
+        System.out.println("========================================\n");
+
+        // ---- 1. Seed the community hazard map ----
+        List<HazardReport> hazards = new ArrayList<>();
+        hazards.add(new HazardReport(new Location(2.0, 2.0), "Poor lighting", 3));
+        hazards.add(new HazardReport(new Location(4.5, 5.0), "Harassment reported", 5));
+        hazards.add(new HazardReport(new Location(6.0, 1.0), "Stray dogs", 2));
+
+        System.out.println("Community hazard reports on file:");
+        for (HazardReport h : hazards) {
+            System.out.println("  - " + h);
+        }
+        System.out.println();
+
+        // ---- 2. Define two candidate routes from campus to hostel ----
+        Route routeA = new Route("Route A (via Main Street)", Arrays.asList(
+                new Location(0, 0),
+                new Location(2, 2),   // passes right through a hazard
+                new Location(5, 5),
+                new Location(8, 8)
+        ));
+
+        Route routeB = new Route("Route B (via Park Avenue)", Arrays.asList(
+                new Location(0, 0),
+                new Location(3, 0.5),
+                new Location(6, 3),
+                new Location(8, 8)
+        ));
+
+        List<Route> candidates = Arrays.asList(routeA, routeB);
+
+        // ---- 3. Score each route and pick the safest one ----
+        RiskEngine riskEngine = new RiskEngine(hazards);
+        Route safestRoute = null;
+        double bestScore = Double.MAX_VALUE;
+
+        System.out.println("AI Risk Engine — evaluating route options:");
+        for (Route r : candidates) {
+            double score = riskEngine.scoreRoute(r);
+            System.out.printf("  %-28s risk score = %.2f%n", r.getName(), score);
+            if (score < bestScore) {
+                bestScore = score;
+                safestRoute = r;
+            }
+        }
+        System.out.println("\n>> SafeRoute recommends: " + safestRoute.getName()
+                + " (lowest predicted risk)\n");
+
+        // ---- 4. Set up trusted contacts and start Companion Mode ----
+        List<TrustedContact> contacts = Arrays.asList(
+                new TrustedContact("Mom", "0300-1234567"),
+                new TrustedContact("Roommate", "0311-9876543")
+        );
+
+        SOSService sosService = new SOSService(contacts, "Campus Security Desk", "Nearest Ride Partner");
+        CompanionSession session = new CompanionSession(safestRoute, contacts, sosService);
+
+        // Simulate the trip; trigger an SOS partway through to show the escalation path
+        session.startTrip(/* triggerSosAtStep = */ 2);
+
+        System.out.println("\n========================================");
+        System.out.println(" Simulation complete.");
+        System.out.println("========================================");
+    }
+}
+
+/** A simple 2D coordinate used to represent a location on the map. */
+class Location {
+    final double x;
+    final double y;
+
+    Location(double x, double y) {
+        this.x = x;
+        this.y = y;
+    }
+
+    double distanceTo(Location other) {
+        double dx = this.x - other.x;
+        double dy = this.y - other.y;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    @Override
+    public String toString() {
+        return String.format("(%.1f, %.1f)", x, y);
+    }
+}
+
+/** A community-submitted hazard report at a specific location. */
+class HazardReport {
+    final Location location;
+    final String description;
+    final int severity; // 1 (minor) to 5 (severe)
+
+    HazardReport(Location location, String description, int severity) {
+        this.location = location;
+        this.description = description;
+        this.severity = severity;
+    }
+
+    @Override
+    public String toString() {
+        return description + " at " + location + " [severity " + severity + "/5]";
+    }
+}
+
+/** A candidate route made up of an ordered list of waypoints. */
+class Route {
+    private final String name;
+    private final List<Location> waypoints;
+
+    Route(String name, List<Location> waypoints) {
+        this.name = name;
+        this.waypoints = waypoints;
+    }
+
+    String getName() {
+        return name;
+    }
+
+    List<Location> getWaypoints() {
+        return waypoints;
+    }
+}
+
+/**
+ * A lightweight stand-in for the AI risk-scoring model described in the
+ * proposal. Real version would use a trained model with time-of-day,
+ * historical incident density, and report recency; here we approximate
+ * it with an inverse-distance-weighted severity sum within a fixed radius.
+ */
+class RiskEngine {
+    private static final double INFLUENCE_RADIUS = 2.0;
+
+    private final List<HazardReport> hazards;
+
+    RiskEngine(List<HazardReport> hazards) {
+        this.hazards = hazards;
+    }
+
+    /** Higher score = riskier route. */
+    double scoreRoute(Route route) {
+        double totalRisk = 0.0;
+        for (Location point : route.getWaypoints()) {
+            for (HazardReport hazard : hazards) {
+                double distance = point.distanceTo(hazard.location);
+                if (distance <= INFLUENCE_RADIUS) {
+                    // Closer + more severe hazards contribute more risk.
+                    double proximityFactor = (INFLUENCE_RADIUS - distance) / INFLUENCE_RADIUS;
+                    totalRisk += proximityFactor * hazard.severity;
+                }
+            }
+        }
+        return totalRisk;
+    }
+}
+
+/** A contact who receives Companion Mode updates and SOS alerts. */
+class TrustedContact {
+    final String name;
+    final String phoneNumber;
+
+    TrustedContact(String name, String phoneNumber) {
+        this.name = name;
+        this.phoneNumber = phoneNumber;
+    }
+}
+
+/** Simulates dispatching alerts to all relevant parties during an SOS. */
+class SOSService {
+    private final List<TrustedContact> contacts;
+    private final String campusSecurityChannel;
+    private final String ridePartnerChannel;
+
+    SOSService(List<TrustedContact> contacts, String campusSecurityChannel, String ridePartnerChannel) {
+        this.contacts = contacts;
+        this.campusSecurityChannel = campusSecurityChannel;
+        this.ridePartnerChannel = ridePartnerChannel;
+    }
+
+    void triggerSOS(Location currentLocation) {
+        System.out.println("\n  !!! SOS TRIGGERED at " + currentLocation + " !!!");
+        for (TrustedContact contact : contacts) {
+            System.out.println("    -> Alert sent to " + contact.name
+                    + " (" + contact.phoneNumber + ") with live location " + currentLocation);
+        }
+        System.out.println("    -> Alert sent to " + campusSecurityChannel
+                + " with live location " + currentLocation);
+        System.out.println("    -> Ride request broadcast to " + ridePartnerChannel
+                + " near " + currentLocation);
+    }
+}
+
+/**
+ * Simulates "Companion Mode": walking a route step by step, sending
+ * check-in updates to trusted contacts, and escalating to SOS if
+ * triggered before reaching the destination.
+ */
+class CompanionSession {
+    private final Route route;
+    private final List<TrustedContact> contacts;
+    private final SOSService sosService;
+
+    CompanionSession(Route route, List<TrustedContact> contacts, SOSService sosService) {
+        this.route = route;
+        this.contacts = contacts;
+        this.sosService = sosService;
+    }
+
+    void startTrip(int triggerSosAtStep) {
+        List<Location> waypoints = route.getWaypoints();
+        System.out.println("Companion Mode started on " + route.getName()
+                + ". Sharing live location with:");
+        for (TrustedContact c : contacts) {
+            System.out.println("  - " + c.name);
+        }
+        System.out.println();
+
+        for (int step = 0; step < waypoints.size(); step++) {
+            Location current = waypoints.get(step);
+            System.out.println("Step " + (step + 1) + "/" + waypoints.size()
+                    + " — now at " + current);
+
+            if (step == triggerSosAtStep) {
+                sosService.triggerSOS(current);
+                System.out.println("  Trip paused for emergency response.\n");
+                return; // Stop the normal trip flow once SOS has been triggered
+            }
+        }
+
+        Location destination = waypoints.get(waypoints.size() - 1);
+        System.out.println("\nArrived safely at " + destination
+                + ". Auto check-in sent to all trusted contacts.");
+    }
+}
